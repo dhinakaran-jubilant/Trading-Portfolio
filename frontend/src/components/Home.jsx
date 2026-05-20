@@ -20,8 +20,13 @@ function Upload({ user, onLogout }) {
   const fileInputRef = useRef(null);
 
   const isValidExcel = (f) => {
-    return f.name.endsWith('.xlsx') || f.name.endsWith('.xls') ||
-      ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"].includes(f.type);
+    return f.name.endsWith('.xlsx') || f.name.endsWith('.xls') || f.name.endsWith('.csv') ||
+      [
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+        "application/vnd.ms-excel",
+        "text/csv",
+        "application/csv"
+      ].includes(f.type);
   };
 
   const handleFiles = (files) => {
@@ -79,7 +84,7 @@ function Upload({ user, onLogout }) {
 
   const handleSubmit = async () => {
     if (!file) {
-        setStatus({ type: 'error', message: 'Please select an Excel file first.' });
+        setStatus({ type: 'error', message: 'Please select an Excel or CSV file first.' });
         return;
     }
 
@@ -144,7 +149,7 @@ function Upload({ user, onLogout }) {
   const errorMessage = status?.type === 'error' ? status.message : null;
   const dismissError = () => setStatus(null);
   
-  const selectedFiles = file ? [{ name: file.name, size: file.size, type: 'EXCEL' }] : [];
+  const selectedFiles = file ? [{ name: file.name, size: file.size, type: file.name.endsWith('.csv') ? 'CSV' : 'EXCEL' }] : [];
 
   return (
     <Layout user={user} onLogout={onLogout} activeTab="portfolio" breadcrumbs={['Summary']}>
@@ -153,7 +158,7 @@ function Upload({ user, onLogout }) {
           {/* Header Section */}
           <div className="flex flex-col items-start text-left gap-2 mb-10">
             <h1 className="text-4xl font-black tracking-tight text-slate-900 dark:text-white transition-colors duration-300">Portfolio Summary Processor</h1>
-            <p className="text-slate-600 dark:text-slate-400 text-sm leading-relaxed transition-colors duration-300">Upload your portfolio equity summary Excel file. The system automatically maps columns and calculates Day P&L to generate a clean, formatted report in the HDFC style.</p>
+            <p className="text-slate-600 dark:text-slate-400 text-sm leading-relaxed transition-colors duration-300">Upload your portfolio equity summary Excel or CSV file. The system automatically maps columns and calculates Day P&L to generate a clean, formatted report in the HDFC style.</p>
           </div>
 
           {/* Main Upload Card Container */}
@@ -208,7 +213,7 @@ function Upload({ user, onLogout }) {
                       type="file"
                       ref={fileInputRef}
                       className="hidden"
-                      accept=".xlsx, .xls"
+                      accept=".xlsx, .xls, .csv"
                       multiple
                       onChange={handleFileChange}
                   />
@@ -218,7 +223,7 @@ function Upload({ user, onLogout }) {
                       </div>
                       <div className="text-center">
                           <h4 className="text-2xl font-bold text-slate-900 dark:text-white mb-2 transition-colors duration-300">Drag and drop files here</h4>
-                          <p className="text-slate-500 text-sm font-medium">Supports .XLSX Excel files only.</p>
+                          <p className="text-slate-500 text-sm font-medium">Supports Excel and CSV files.</p>
                       </div>
                   </div>
                   <button className="flex items-center gap-3 px-10 py-4 bg-blue-600 text-white rounded-xl font-bold shadow-xl shadow-blue-600/20 hover:bg-blue-700 transition-all active:scale-95 cursor-pointer">
