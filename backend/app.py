@@ -44,6 +44,10 @@ def process_excel():
     
     file = request.files['file']
     try:
+        # Get dynamic title info early to determine style and parsing
+        name_val = request.form.get('name', 'Gautham')
+        bank_val = request.form.get('bank', 'HDFC')
+
         # Read input file
         df = None
         try:
@@ -54,9 +58,10 @@ def process_excel():
             elif file.filename.endswith('.xlsx'):
                 df = pd.read_excel(file, engine='openpyxl')
             else:
-                # General fallback
+                # General fallback (read CSV with column range to prevent dropping rows due to multi-column header/title rows)
                 file.seek(0)
-                df = pd.read_csv(file, sep=None, engine='python', on_bad_lines='skip')
+                df = pd.read_csv(file, sep=None, names=range(50), engine='python')
+                df = df.dropna(how='all', axis=1)
         except Exception as e:
             # Final attempt if extension-based logic fails
             try:
@@ -65,7 +70,8 @@ def process_excel():
             except Exception as e_xl:
                 try:
                     file.seek(0)
-                    df = pd.read_csv(file, sep="\t", engine='python', on_bad_lines='skip')
+                    df = pd.read_csv(file, sep=None, names=range(50), engine='python')
+                    df = df.dropna(how='all', axis=1)
                 except Exception as e2:
                     return jsonify({"error": f"Could not read file: {str(e2)}"}), 400
 
@@ -120,8 +126,7 @@ def process_excel():
                 break
         
         # Check if the file matches the new column structure
-        new_style_keys = {'symbol', 'ltp', 'investment value', 'investment', "today's p&l", "today's p"}
-        has_new_style = any(any(k in str(c).lower() for k in new_style_keys) for c in df.columns)
+        has_new_style = (bank_val == 'HDFC')
         
         # Mapping as per main.ipynb and user request
         if has_new_style:
@@ -139,7 +144,7 @@ def process_excel():
             }
         else:
             mapping = {
-                'Company Name': 'Company Name',
+                'Company Name': 'SYMBOL',
                 'Qty': 'Qty',
                 'Average Cost Price': 'Avg Price',
                 'Current Market Price': 'CMP',
@@ -166,7 +171,7 @@ def process_excel():
                     src_lower = src.lower()
                     for col in df.columns:
                         col_lower = col.lower()
-                        if target in ['Company Name', 'SYMBOL'] and 'symbol' in col_lower:
+                        if target in ['Company Name', 'SYMBOL'] and ('symbol' in col_lower or 'company' in col_lower):
                             processed_df[target] = df[col]
                             found = True
                             break
@@ -255,7 +260,7 @@ def process_excel():
         if has_new_style:
             cols = ['SYMBOL', 'QTY', 'AVG PRICE', 'LTP', 'INVESTED', 'CURRENT VALUE', 'UNREALISED P&L', 'UNREALISED P&L %', 'Day P&L', 'Day CHG %']
         else:
-            cols = ['Company Name', 'Qty', 'Avg Price', 'CMP', 'Invested', 'Market Price', 'Unrealized P&L', 'Unrealized P&L %', 'Day P&L', '% Change']
+            cols = ['SYMBOL', 'Qty', 'Avg Price', 'CMP', 'Invested', 'Market Price', 'Unrealized P&L', 'Unrealized P&L %', 'Day P&L', '% Change']
         # Ensure all columns exist before reordering
         final_cols = [c for c in cols if c in processed_df.columns]
         processed_df = processed_df[final_cols]
@@ -286,7 +291,7 @@ def process_excel():
             total_day_pl = processed_df['Day P&L'].sum() if 'Day P&L' in processed_df.columns else 0
             
             total_row = {
-                'Company Name': 'TOTAL',
+                'SYMBOL': 'TOTAL',
                 'Qty': np.nan,
                 'Avg Price': np.nan,
                 'CMP': np.nan,
@@ -300,9 +305,7 @@ def process_excel():
         
         processed_df = pd.concat([processed_df, pd.DataFrame([total_row])], ignore_index=True)
         
-        # Get dynamic title info
-        name_val = request.form.get('name', 'Gautham')
-        bank_val = request.form.get('bank', 'HDFC')
+        # Get dynamic title info (retrieved early at start of process_excel)
         
         # Determine Morning/Evening update
         now = datetime.now()
@@ -420,8 +423,8 @@ def process_excel():
                         for r_idx in range(3, worksheet.max_row + 1):
                             worksheet[f"{c_letter}{r_idx}"].number_format = indian_format
 
-            # Apply Conditional Formatting to 'UNREALISED P&L %' and 'Day P&L'
-            cf_cols = ['UNREALISED P&L %'] if has_new_style else ['Unrealized P&L %', 'Day P&L']
+            # Apply Conditional Formatting to 'UNREALISED P&L %' and 'Unrealized P&L %'
+            cf_cols = ['UNREALISED P&L %'] if has_new_style else ['Unrealized P&L %']
             for col_name in cf_cols:
                 if col_name in processed_df.columns:
                     col_idx = processed_df.columns.get_loc(col_name) + 1
