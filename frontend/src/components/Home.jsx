@@ -16,6 +16,7 @@ function Upload({ user, onLogout }) {
 
   const [selectedName, setSelectedName] = useState('Gautham');
   const [selectedBank, setSelectedBank] = useState('HDFC');
+  const [syncToSheets, setSyncToSheets] = useState(true);
 
   const fileInputRef = useRef(null);
 
@@ -96,6 +97,7 @@ function Upload({ user, onLogout }) {
     formData.append('file', file);
     formData.append('name', selectedName);
     formData.append('bank', selectedBank);
+    formData.append('sync_to_sheets', syncToSheets.toString());
 
     try {
       const response = await axios.post(`${config.API_BASE_URL}/process-excel`, formData, {
@@ -122,7 +124,18 @@ function Upload({ user, onLogout }) {
       link.parentNode.removeChild(link);
       window.URL.revokeObjectURL(url);
 
-      setSuccessMessage('Your Portfolio Summary Report has been processed and is ready for use.');
+      const isSyncSuccess = response.headers['x-sync-success'] === 'true';
+      const syncError = response.headers['x-sync-error'];
+
+      let msg = 'Your Portfolio Summary Report has been processed and is ready for use.';
+      if (syncToSheets) {
+        if (isSyncSuccess) {
+          msg += ' Daily PL details have been successfully synced to Google Sheets!';
+        } else if (syncError) {
+          msg += ` WARNING: Report generated, but failed to sync to Google Sheets: ${syncError}`;
+        }
+      }
+      setSuccessMessage(msg);
       setShowSuccessModal(true);
       clearAll();
     } catch (err) {
@@ -198,6 +211,30 @@ function Upload({ user, onLogout }) {
                   <span className="material-symbols-outlined absolute right-5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">expand_more</span>
                 </div>
               </div>
+            </div>
+
+            {/* Google Sheets Sync Toggle */}
+            <div className="flex items-center justify-between bg-slate-50 dark:bg-[#111926] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 mb-8 transition-colors duration-300">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-emerald-100 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                  <span className="material-symbols-outlined">analytics</span>
+                </div>
+                <div className="flex flex-col text-left">
+                  <span className="text-sm font-bold text-slate-900 dark:text-white transition-colors duration-300">Sync with Google Sheets</span>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400 transition-colors duration-300">
+                    Automatically logs daily profit/loss figures to "Profit_Loss Details"
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSyncToSheets(!syncToSheets)}
+                className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors focus:outline-none cursor-pointer ${syncToSheets ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700'}`}
+              >
+                <span
+                  className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${syncToSheets ? 'translate-x-6' : 'translate-x-1'}`}
+                />
+              </button>
             </div>
 
             {/* Unified Drop Zone */}

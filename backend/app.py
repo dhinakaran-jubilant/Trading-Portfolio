@@ -3,6 +3,7 @@ from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 import pandas as pd
 import io
+import os
 from datetime import datetime
 import numpy as np
 from openpyxl.formatting.rule import ColorScaleRule
@@ -10,6 +11,387 @@ from openpyxl.utils import get_column_letter
 from openpyxl.styles import Alignment, PatternFill, Font, Border, Side
 
 app = Flask(__name__)
+
+def update_google_sheet(total_invested, total_market_value, total_unrealized_pl, total_day_pl, name_val, bank_val):
+    creds_path = os.path.join(os.path.dirname(__file__), "update-sheet-497206-0ab70ed3823a.json")
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    
+    import gspread
+    from google.oauth2.service_account import Credentials
+    
+    try:
+        creds = Credentials.from_service_account_file(creds_path, scopes=scopes)
+        client = gspread.authorize(creds)
+    except Exception as e:
+        raise Exception(f"Failed to authorize Google Sheets: {str(e)}")
+        
+    spreadsheet_id = "110by378Ie7TVMErdZ0NgOULDGXY43UKjS9udKykGxFk"
+    sheet_name = "DAILY PL DETAILS"
+    
+    try:
+        sh = client.open_by_key(spreadsheet_id)
+    except Exception as e:
+        raise Exception(
+            f"Failed to open Google Sheet by ID: {str(e)}. "
+            f"Please ensure you have shared the spreadsheet with the service account email: {creds.service_account_email}"
+        )
+        
+    # Get or create worksheet
+    try:
+        ws = sh.worksheet(sheet_name)
+    except gspread.exceptions.WorksheetNotFound:
+        try:
+            ws = sh.add_worksheet(title=sheet_name, rows="1000", cols="20")
+        except Exception as e:
+            raise Exception(f"Failed to create sheet '{sheet_name}': {str(e)}")
+            
+    try:
+        # Check date and session
+        now = datetime.now()
+        current_date = now.strftime("%d/%m/%Y")
+        session = "Evening" if (now.hour >= 13 or now.hour < 9) else "Morning"
+        
+        if session != "Evening":
+            print(f"Skipping Google Sheet update for Morning session report: {name_val} ({bank_val}).")
+            return
+            
+        is_sudhakar_icici = (name_val.strip().upper() == "SUDHAKAR" and bank_val.strip().upper() == "ICICI")
+        
+        if is_sudhakar_icici:
+                
+            # --- Custom 11-Row Portfolio Dashboard Generation ---
+            values = ws.get_all_values()
+            
+            # 1. Initialize default values based on the screenshot
+            defaults = {
+                ("SUDHAKAR", "ICICI DIRECT"): {
+                    "profit": total_unrealized_pl,
+                    "invested": total_invested,
+                    "bank_balance": 379680,
+                    "cmp_investment": total_market_value,
+                    "profit_pct": total_unrealized_pl / total_invested if total_invested != 0 else 0,
+                    "daily_profit": total_day_pl
+                },
+                ("NIRMALA", "ADITYA BIRLA"): {
+                    "profit": 0.0,
+                    "invested": 1.0,
+                    "bank_balance": 1.0,
+                    "cmp_investment": 1.0,
+                    "profit_pct": 0.0,
+                    "daily_profit": 1.0
+                },
+                ("SUDHAKAR", "ADITYA BIRLA"): {
+                    "profit": 0.0,
+                    "invested": 0.0,
+                    "bank_balance": 0.0,
+                    "cmp_investment": 0.0,
+                    "profit_pct": 0.01,  # 1.00%
+                    "daily_profit": 0.0
+                },
+                ("NIRMALA", "HDFC DIRECT"): {
+                    "profit": 0.0,
+                    "invested": 850.0,
+                    "bank_balance": 5088.0,
+                    "cmp_investment": 850.0,
+                    "profit_pct": 0.0,
+                    "daily_profit": 0.0
+                },
+                ("SUDHAKAR", "ZERODHA"): {
+                    "profit": 0.0,
+                    "invested": 0.0,
+                    "bank_balance": 0.0,
+                    "cmp_investment": 0.0,
+                    "profit_pct": 0.0,
+                    "daily_profit": 0.0
+                },
+                ("SUDHAKAR", "HDFCDIRECT"): {
+                    "profit": 0.0,
+                    "invested": 4036.0,
+                    "bank_balance": 21151.0,
+                    "cmp_investment": 4036.0,
+                    "profit_pct": 0.0,
+                    "daily_profit": 0.0
+                }
+            }
+            
+            # Helper to parse spreadsheet numeric formats
+            def parse_num(val_str):
+                if not val_str:
+                    return 0.0
+                s = str(val_str).strip().replace(',', '').replace('%', '')
+                try:
+                    return float(s)
+                except:
+                    return 0.0
+            
+            # 2. Bottom-up scanning to fetch the last known balances of all other portfolios
+            current_values = defaults.copy()
+            
+            if values:
+                for r in reversed(values):
+                    if len(r) >= 12:
+                        prev_name = str(r[2]).strip().upper()
+                        prev_firm = str(r[3]).strip().upper()
+                        key = (prev_name, prev_firm)
+                        # Fetch the values for other combinations, leaving SUDHAKAR | ICICI DIRECT updated
+                        if key in current_values and key != ("SUDHAKAR", "ICICI DIRECT"):
+                            # Only populate if we haven't read a newer value yet
+                            if current_values[key]["profit"] == defaults[key]["profit"] and current_values[key]["invested"] == defaults[key]["invested"] and current_values[key]["bank_balance"] == defaults[key]["bank_balance"]:
+                                current_values[key] = {
+                                    "profit": parse_num(r[6]),
+                                    "invested": parse_num(r[7]),
+                                    "bank_balance": parse_num(r[8]),
+                                    "cmp_investment": parse_num(r[9]),
+                                    "profit_pct": parse_num(r[10]) / 100.0 if '%' in str(r[10]) else parse_num(r[10]),
+                                    "daily_profit": parse_num(r[11])
+                                }
+            
+            # Determine starting row for formulas
+            headers = [
+                "", "S.No", "Name", "Broking Firm", "Today Profit", "Monthly Profit (Booked)",
+                "Portfolio Overall Profit(UNREALISED PROFIT)", "Investment- Holding", 
+                "Bank Balance ( Cash Balance)", "CMP Investment", "Profit%(unrealised)", "Daily Profit"
+            ]
+            
+            if not values:
+                start_row = 3
+                rows_to_write = [headers]
+                write_start_row = 2
+            else:
+                start_row = len(values) + 4
+                rows_to_write = [
+                    [""] * 12,
+                    [""] * 12,
+                    headers
+                ]
+                write_start_row = len(values) + 1
+                
+            # 3. Construct the 11 rows of data with exact formula offsets
+            r1 = [current_date, "", "", "INVESTMENT", "", "", "", "", "", "", "", ""]
+            r2 = [
+                "", 1, "SUDHAKAR", "ICICI DIRECT", "", "", 
+                round(current_values[("SUDHAKAR", "ICICI DIRECT")]["profit"]), 
+                round(current_values[("SUDHAKAR", "ICICI DIRECT")]["invested"]), 
+                round(current_values[("SUDHAKAR", "ICICI DIRECT")]["bank_balance"]), 
+                f"=G{start_row+1}+H{start_row+1}", f"=IFERROR(G{start_row+1}/H{start_row+1},0)", 
+                round(current_values[("SUDHAKAR", "ICICI DIRECT")]["daily_profit"])
+            ]
+            r3 = [
+                "", 1, "NIRMALA", "ADITYA BIRLA", "", "", 
+                round(current_values[("NIRMALA", "ADITYA BIRLA")]["profit"]), 
+                round(current_values[("NIRMALA", "ADITYA BIRLA")]["invested"]), 
+                round(current_values[("NIRMALA", "ADITYA BIRLA")]["bank_balance"]), 
+                f"=G{start_row+2}+H{start_row+2}", f"=IFERROR(G{start_row+2}/H{start_row+2},0)", 
+                round(current_values[("NIRMALA", "ADITYA BIRLA")]["daily_profit"])
+            ]
+            r4 = [
+                "", "", "", "TOTAL", "", "", 
+                f"=SUM(G{start_row+1}:G{start_row+2})", 
+                f"=SUM(H{start_row+1}:H{start_row+2})", 
+                f"=SUM(I{start_row+1}:I{start_row+2})", 
+                f"=SUM(J{start_row+1}:J{start_row+2})", 
+                f"=IFERROR(G{start_row+3}/H{start_row+3},0)", 
+                f"=SUM(L{start_row+1}:L{start_row+2})"
+            ]
+            r_empty = [""] * 12
+            r5 = ["", "", "", "", "", "", "TRADING", "", "", "", "", ""]
+            r6 = [
+                "", 1, "SUDHAKAR", "ADITYA BIRLA", "", "", 
+                round(current_values[("SUDHAKAR", "ADITYA BIRLA")]["profit"]), 
+                round(current_values[("SUDHAKAR", "ADITYA BIRLA")]["invested"]), 
+                round(current_values[("SUDHAKAR", "ADITYA BIRLA")]["bank_balance"]), 
+                f"=G{start_row+6}+H{start_row+6}", f"=IFERROR(G{start_row+6}/H{start_row+6},0)", 
+                round(current_values[("SUDHAKAR", "ADITYA BIRLA")]["daily_profit"])
+            ]
+            r7 = [
+                "", 2, "NIRMALA", "HDFC DIRECT", "", "", 
+                round(current_values[("NIRMALA", "HDFC DIRECT")]["profit"]), 
+                round(current_values[("NIRMALA", "HDFC DIRECT")]["invested"]), 
+                round(current_values[("NIRMALA", "HDFC DIRECT")]["bank_balance"]), 
+                f"=G{start_row+7}+H{start_row+7}", f"=IFERROR(G{start_row+7}/H{start_row+7},0)", 
+                round(current_values[("NIRMALA", "HDFC DIRECT")]["daily_profit"])
+            ]
+            r8 = [
+                "", "", "", "TOTAL", "", "", 
+                f"=SUM(G{start_row+6}:G{start_row+7})", 
+                f"=SUM(H{start_row+6}:H{start_row+7})", 
+                f"=SUM(I{start_row+6}:I{start_row+7})", 
+                f"=SUM(J{start_row+6}:J{start_row+7})", 
+                f"=IFERROR(G{start_row+8}/H{start_row+8},0)", 
+                f"=SUM(L{start_row+6}:L{start_row+7})"
+            ]
+            r_empty2 = [""] * 12
+            r9 = [
+                "", 1, "SUDHAKAR", "ZERODHA", "", "", 
+                round(current_values[("SUDHAKAR", "ZERODHA")]["profit"]), 
+                round(current_values[("SUDHAKAR", "ZERODHA")]["invested"]), 
+                round(current_values[("SUDHAKAR", "ZERODHA")]["bank_balance"]), 
+                f"=G{start_row+10}+H{start_row+10}", f"=IFERROR(G{start_row+10}/H{start_row+10},0)", 
+                round(current_values[("SUDHAKAR", "ZERODHA")]["daily_profit"])
+            ]
+            r10 = [
+                "", 2, "SUDHAKAR", "HDFCDIRECT", "", "", 
+                round(current_values[("SUDHAKAR", "HDFCDIRECT")]["profit"]), 
+                round(current_values[("SUDHAKAR", "HDFCDIRECT")]["invested"]), 
+                round(current_values[("SUDHAKAR", "HDFCDIRECT")]["bank_balance"]), 
+                f"=G{start_row+11}+H{start_row+11}", f"=IFERROR(G{start_row+11}/H{start_row+11},0)", 
+                round(current_values[("SUDHAKAR", "HDFCDIRECT")]["daily_profit"])
+            ]
+            r11 = [
+                "", "", "", "Total", "", "", 
+                f"=G{start_row+3}+G{start_row+8}+G{start_row+10}+G{start_row+11}", 
+                f"=H{start_row+3}+H{start_row+8}+H{start_row+10}+H{start_row+11}", 
+                f"=I{start_row+3}+I{start_row+8}+I{start_row+10}+I{start_row+11}", 
+                f"=J{start_row+3}+J{start_row+8}+J{start_row+10}+J{start_row+11}", 
+                f"=IFERROR(G{start_row+12}/H{start_row+12},0)", 
+                f"=L{start_row+3}+L{start_row+8}+L{start_row+10}+L{start_row+11}"
+            ]
+            
+            rows_to_write.extend([r1, r2, r3, r4, r_empty, r5, r6, r7, r8, r_empty2, r9, r10, r11])
+            ws.update(f"A{write_start_row}:L{write_start_row + len(rows_to_write) - 1}", rows_to_write, value_input_option='USER_ENTERED')
+            
+            try:
+                # Format the written range to ensure all values are centered, middle-aligned, and wrapped
+                ws.format(f"A{write_start_row}:L{write_start_row + len(rows_to_write) - 1}", {
+                    "horizontalAlignment": "CENTER",
+                    "verticalAlignment": "MIDDLE",
+                    "wrapStrategy": "WRAP"
+                })
+                
+                # Specifically format the header row to remove bold formatting
+                header_row_idx = write_start_row if not values else write_start_row + 2
+                ws.format(f"A{header_row_idx}:L{header_row_idx}", {
+                    "horizontalAlignment": "CENTER",
+                    "verticalAlignment": "MIDDLE",
+                    "wrapStrategy": "WRAP",
+                    "textFormat": {
+                        "bold": False
+                    }
+                })
+                
+                # Add double bottom border for header from B column to L
+                ws.format(f"B{header_row_idx}:L{header_row_idx}", {
+                    "borders": {
+                        "bottom": {
+                            "style": "DOUBLE"
+                        }
+                    }
+                })
+                
+                # Add #f3f3f3 bg color for next row of header from B to L column
+                ws.format(f"B{header_row_idx + 1}:L{header_row_idx + 1}", {
+                    "backgroundColor": {
+                        "red": 0.953,
+                        "green": 0.953,
+                        "blue": 0.953
+                    }
+                })
+                
+                # Add #f3f3f3 bg color for 3rd row from header from B to L column
+                ws.format(f"B{header_row_idx + 3}:L{header_row_idx + 3}", {
+                    "backgroundColor": {
+                        "red": 0.953,
+                        "green": 0.953,
+                        "blue": 0.953
+                    }
+                })
+                
+                # Add #f9cb9c bg color and top/bottom bold (SOLID_MEDIUM) borders for 4th row from header (TOTAL row) from B to L
+                ws.format(f"B{header_row_idx + 4}:L{header_row_idx + 4}", {
+                    "backgroundColor": {
+                        "red": 0.976,
+                        "green": 0.796,
+                        "blue": 0.612
+                    },
+                    "borders": {
+                        "top": {
+                            "style": "SOLID_MEDIUM"
+                        },
+                        "bottom": {
+                            "style": "SOLID_MEDIUM"
+                        }
+                    }
+                })
+                
+                # Add #93c47d bg color for 5th to 9th row from header from B to L column (TRADING section)
+                ws.format(f"B{header_row_idx + 5}:L{header_row_idx + 9}", {
+                    "backgroundColor": {
+                        "red": 0.576,
+                        "green": 0.769,
+                        "blue": 0.490
+                    }
+                })
+                
+                # Add top and bottom bold border for 9th row from header (TRADING TOTAL) from B to L
+                ws.format(f"B{header_row_idx + 9}:L{header_row_idx + 9}", {
+                    "borders": {
+                        "top": {
+                            "style": "SOLID_MEDIUM"
+                        },
+                        "bottom": {
+                            "style": "SOLID_MEDIUM"
+                        }
+                    }
+                })
+                
+                # Add #ffe599 bg color for 10th to 12th row from header from B to L column (OTHERS section)
+                ws.format(f"B{header_row_idx + 10}:L{header_row_idx + 12}", {
+                    "backgroundColor": {
+                        "red": 1.0,
+                        "green": 0.898,
+                        "blue": 0.600
+                    }
+                })
+                
+                # Add #deebf6 bg color for 13th row from header (Overall Total) from B to L
+                ws.format(f"B{header_row_idx + 13}:L{header_row_idx + 13}", {
+                    "backgroundColor": {
+                        "red": 0.871,
+                        "green": 0.922,
+                        "blue": 0.965
+                    }
+                })
+                # Add top and bottom lite (thin) border for 13th row from header (Overall Total) from B to L
+                ws.format(f"B{header_row_idx + 13}:L{header_row_idx + 13}", {
+                    "borders": {
+                        "top": {
+                            "style": "SOLID"
+                        },
+                        "bottom": {
+                            "style": "SOLID"
+                        }
+                    }
+                })
+            except Exception as format_err:
+                print(f"Non-fatal formatting error: {format_err}")
+            
+        else:
+            # Standard single-row history logging for other accounts or morning sessions
+            values = ws.get_all_values()
+            headers = [
+                "Date", "Session", "Name", "Bank", 
+                "Total Invested", "Current Value", "Unrealized P&L", "Day P&L"
+            ]
+            if not values:
+                ws.append_row(headers)
+                
+            row = [
+                current_date,
+                session,
+                name_val,
+                bank_val,
+                round(total_invested, 2),
+                round(total_market_value, 2),
+                round(total_unrealized_pl, 2),
+                round(total_day_pl, 2)
+            ]
+            ws.append_row(row, value_input_option='USER_ENTERED')
+            
+    except Exception as e:
+        raise Exception(f"Error reading/writing to Google Sheet: {str(e)}")
 
 # Hardcoded credentials for simplicity
 HARDCODED_USERS = {
@@ -47,6 +429,9 @@ def process_excel():
         # Get dynamic title info early to determine style and parsing
         name_val = request.form.get('name', 'Gautham')
         bank_val = request.form.get('bank', 'HDFC')
+        sync_to_sheets = request.form.get('sync_to_sheets', 'false').lower() == 'true'
+        sheet_sync_success = False
+        sheet_sync_error = None
 
         # Read input file
         df = None
@@ -305,12 +690,50 @@ def process_excel():
         
         processed_df = pd.concat([processed_df, pd.DataFrame([total_row])], ignore_index=True)
         
+        # Sync daily totals to Google Sheet if requested in a background thread
+        if sync_to_sheets:
+            import threading
+            
+            def run_sync_background(t_inv, t_val, t_unreal, t_day, name, bank):
+                try:
+                    update_google_sheet(
+                        total_invested=t_inv,
+                        total_market_value=t_val,
+                        total_unrealized_pl=t_unreal,
+                        total_day_pl=t_day,
+                        name_val=name,
+                        bank_val=bank
+                    )
+                    print(f"Background Google Sheet sync completed successfully for {name} ({bank}).")
+                except Exception as sync_err:
+                    print(f"Background Google Sheet sync failed: {str(sync_err)}")
+            
+            try:
+                # Start background thread
+                thread = threading.Thread(
+                    target=run_sync_background,
+                    args=(
+                        float(total_invested),
+                        float(total_market_value),
+                        float(total_unrealized_pl),
+                        float(total_day_pl),
+                        str(name_val),
+                        str(bank_val)
+                    )
+                )
+                thread.daemon = True
+                thread.start()
+                sheet_sync_success = True
+            except Exception as thread_err:
+                sheet_sync_error = str(thread_err)
+                print(f"Failed to start background sync thread: {sheet_sync_error}")
+        
         # Get dynamic title info (retrieved early at start of process_excel)
         
         # Determine Morning/Evening update
         now = datetime.now()
-        # Using 13:00 (1 PM) as the cutoff for Morning vs Evening update
-        update_status = "Morning" if now.hour < 13 else "Evening"
+        # Treat hour >= 13 or hour < 9 as Evening (enables late night/early morning testing), and 9 to 12 as Morning
+        update_status = "Evening" if (now.hour >= 13 or now.hour < 9) else "Morning"
         current_date = now.strftime("%d.%m.%Y")
         
         # Format title as per user request: ICICI (name) sir as on 13.05.2026 (Morning update)
@@ -343,13 +766,25 @@ def process_excel():
             title_cell.font = Font(color='FFFFFF', bold=True, size=12)
             title_cell.alignment = Alignment(horizontal='center', vertical='center')
 
+
+            
             # Center align all headers and values
             center_alignment = Alignment(horizontal='center', vertical='center')
+            header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
             header_total_fill = PatternFill(start_color='FFD9D9D9', end_color='FFD9D9D9', fill_type='solid')
+            next_row_fill = PatternFill(start_color='FFF3F3F3', end_color='FFF3F3F3', fill_type='solid')
+            peach_fill = PatternFill(start_color='FFF9CB9C', end_color='FFF9CB9C', fill_type='solid')
+            green_fill = PatternFill(start_color='FF93C47D', end_color='FF93C47D', fill_type='solid')
+            yellow_fill = PatternFill(start_color='FFFFE599', end_color='FFFFE599', fill_type='solid')
+            blue_fill = PatternFill(start_color='FFDEEBF6', end_color='FFDEEBF6', fill_type='solid')
             bold_font = Font(bold=True)
             
             thin_side = Side(border_style="thin", color="000000")
+            medium_side = Side(border_style="medium", color="000000")
+            double_bottom_side = Side(border_style="double", color="000000")
             thin_border = Border(top=thin_side, left=thin_side, right=thin_side, bottom=thin_side)
+            header_border_double = Border(top=thin_side, left=thin_side, right=thin_side, bottom=double_bottom_side)
+            total_bold_border = Border(top=medium_side, left=thin_side, right=thin_side, bottom=medium_side)
             
             header_row_idx = 2
             total_row_idx = len(processed_df) + 2
@@ -358,21 +793,64 @@ def process_excel():
                 for col_idx, cell in enumerate(row, start=1):
                     if has_new_style:
                         if row_idx == 2 or row_idx == total_row_idx:
-                            cell.border = thin_border
-                            cell.alignment = center_alignment
+                            if row_idx == 2 and col_idx >= 2:
+                                cell.border = header_border_double
+                            else:
+                                cell.border = thin_border
+                            cell.alignment = header_alignment if row_idx == 2 else center_alignment
                             cell.fill = header_total_fill
-                            cell.font = bold_font
+                            if row_idx == total_row_idx:
+                                cell.font = bold_font
                         elif row_idx > 2:
-                            cell.border = thin_border
+                            if row_idx == 6 and col_idx >= 2:
+                                cell.border = total_bold_border
+                                cell.fill = peach_fill
+                            elif row_idx == 11 and col_idx >= 2:
+                                cell.border = total_bold_border
+                            elif row_idx == 13 and col_idx >= 2:
+                                cell.border = thin_border
+                            else:
+                                cell.border = thin_border
                             cell.alignment = center_alignment
+                            if (row_idx == 3 or row_idx == 5) and col_idx >= 2:
+                                cell.fill = next_row_fill
+                            elif 7 <= row_idx <= 10 and col_idx >= 2:
+                                cell.fill = green_fill
+                            elif 11 <= row_idx <= 12 and col_idx >= 2:
+                                cell.fill = yellow_fill
+                            elif row_idx == 13 and col_idx >= 2:
+                                cell.fill = blue_fill
                     else:
-                        cell.border = thin_border
+                        if row_idx == 2 and col_idx >= 2:
+                            cell.border = header_border_double
+                        elif (row_idx == 6 or row_idx == 11) and col_idx >= 2:
+                            cell.border = total_bold_border
+                        elif row_idx == 13 and col_idx >= 2:
+                            cell.border = thin_border
+                        else:
+                            cell.border = thin_border
                         if row_idx >= 2:
-                            cell.alignment = center_alignment
+                            cell.alignment = header_alignment if row_idx == 2 else center_alignment
                             if row_idx == 2 or row_idx == total_row_idx:
                                 cell.fill = header_total_fill
-                                cell.font = bold_font
+                                if row_idx == total_row_idx:
+                                    cell.font = bold_font
+                            elif (row_idx == 3 or row_idx == 5) and col_idx >= 2:
+                                cell.fill = next_row_fill
+                            elif row_idx == 6 and col_idx >= 2:
+                                cell.fill = peach_fill
+                            elif 7 <= row_idx <= 10 and col_idx >= 2:
+                                cell.fill = green_fill
+                            elif 11 <= row_idx <= 12 and col_idx >= 2:
+                                cell.fill = yellow_fill
+                            elif row_idx == 13 and col_idx >= 2:
+                                cell.fill = blue_fill
 
+            # Insert empty row between TOTAL (row 6) and TRADING section (row 7)
+            worksheet.insert_rows(7)
+            # Insert empty row as 10th from header (between TRADING TOTAL and ZERODHA)
+            worksheet.insert_rows(12)
+            
             # Set Row Heights
             worksheet.row_dimensions[1].height = 26 # Title is Row 1
             worksheet.row_dimensions[2].height = 38 # Header is Row 2
@@ -447,12 +925,17 @@ def process_excel():
         # Format filename as per user request: name_bank_date.xlsx
         download_filename = f"{name_val}_{bank_val}_{current_date}.xlsx"
         
-        return send_file(
+        resp = send_file(
             output,
             as_attachment=True,
             download_name=download_filename,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+        resp.headers['Access-Control-Expose-Headers'] = 'X-Sync-Success, X-Sync-Error'
+        resp.headers['X-Sync-Success'] = 'true' if sheet_sync_success else 'false'
+        if sheet_sync_error:
+            resp.headers['X-Sync-Error'] = sheet_sync_error
+        return resp
         
     except Exception as e:
         import traceback
